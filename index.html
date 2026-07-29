@@ -244,6 +244,12 @@
             <button id="btn-action-attack" style="background: #dc3545; padding: 12px 25px; font-size: 14px; font-weight: bold; cursor: pointer; border-radius: 6px;">⚔️ สั่งโจมตี</button>
             <button id="btn-action-ability" style="background: #007bff; padding: 12px 25px; font-size: 14px; font-weight: bold; cursor: pointer; border-radius: 6px;">✨ สั่งใช้ความสามารถ</button>
         </div>
+        <div style="display: flex; gap: 15px; margin-top: 20px;">
+            <button id="btn-action-attack" style="background: #dc3545; padding: 12px 25px; font-size: 14px; font-weight: bold; cursor: pointer; border-radius: 6px;">⚔️ สั่งโจมตี</button>
+            <button id="btn-action-ability" style="background: #007bff; padding: 12px 25px; font-size: 14px; font-weight: bold; cursor: pointer; border-radius: 6px;">✨ สั่งใช้ความสามารถ</button>
+            <button id="btn-action-link" style="background: #e83e8c; padding: 12px 25px; font-size: 14px; font-weight: bold; cursor: pointer; border-radius: 6px; display: none;">🔗 ประกาศคู่หู</button>
+        </div>
+
         <button onclick="document.getElementById('avatar-action-modal').style.display='none'" style="background: #6c757d; padding: 8px 20px; font-size: 12px; font-weight: bold; cursor: pointer; margin-top: 15px; border-radius: 4px;">❌ ยกเลิก</button>
     </div>
 
@@ -1036,6 +1042,30 @@
                             
                             const btnAttack = document.getElementById('btn-action-attack');
                             const btnAbility = document.getElementById('btn-action-ability');
+                            const btnLink = document.getElementById('btn-action-link'); // 👈 เพิ่มการดึงปุ่ม
+                            
+                            btnLink.style.display = 'none'; // ค่าเริ่มต้นให้ซ่อนไว้
+
+                            // 🔗 ตรวจสอบเงื่อนไขว่าสามารถโชว์ปุ่มประกาศคู่หูได้ไหม?
+                            if (card.partnerNameStr && !card.isLinkedStatus) {
+                                const myState = gameStateData.players[myRole];
+                                // เช็คว่ามีตัวคู่หูรออยู่บนสนามไหม และต้องยังไม่เคยประกาศลิงก์ในเทิร์นนี้
+                                const hasPartner = myState.board.avatarZone.some(a => 
+                                    a.uniqueId !== card.uniqueId && a.name.includes(card.partnerNameStr) && !a.isLinkedStatus
+                                );
+
+                                if (hasPartner && !myState.hasDeclaredLinkThisTurn) {
+                                    btnLink.style.display = 'inline-block';
+                                    btnLink.onclick = () => {
+                                        modal.style.display = 'none';
+                                        socket.emit('declare-partner-link', {
+                                            roomName: currentRoom,
+                                            playerRole: myRole,
+                                            cardId: card.uniqueId
+                                        });
+                                    };
+                                }
+                            }
 
                             // 1. ตรวจสอบการโจมตี (ถ้าการ์ดอยู่ในสภาพนอน หรือ ไม่ใช่ Battle Phase จะโจมตีไม่ได้)
                             if (card.isResting || gameStateData.currentPhase !== 'BATTLE_PHASE') {

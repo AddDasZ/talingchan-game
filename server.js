@@ -130,23 +130,11 @@ function executePhaseTriggers(game, roomName, phaseName) {
 }
 
 // 🔗 ฟังก์ชันกรองความสามารถ: ตัดความสามารถที่ถูกล็อกด้วย "คู่หู/Link" ออก หากไม่มีคู่หูบนสนาม
+// 🔗 ฟังก์ชันกรองความสามารถ: (อัปเดตใหม่ ไม่ตัด Text หลักทิ้งแล้ว)
 function getEffectiveAbilityText(playerState, avatarCard) {
     let text = avatarCard.abilityText || "";
-    let partnerName = getPartnerName(text);
     
-    if (partnerName) {
-        let hasPartner = playerState.board.avatarZone.some(a => 
-            a.uniqueId !== avatarCard.uniqueId && a.name.includes(partnerName)
-        );
-        
-        if (!hasPartner) {
-            let splitIndex = text.search(/(?:คู่หู|link)/i);
-            if (splitIndex !== -1) {
-                text = text.substring(0, splitIndex); // ตัด Text ส่วนที่เป็นของคู่หูทิ้งไปเลย
-            }
-        }
-    }
-    // 🌟 [เพิ่มใหม่] แปะ Keyword ชั่วคราวเข้าไปใน Text เพื่อให้ระบบ Combat อ่านเจอ!
+    // แปะ Keyword ชั่วคราวเข้าไปใน Text เพื่อให้ระบบ Combat อ่านเจอ
     if (avatarCard.tempTraits && avatarCard.tempTraits.length > 0) {
         let activeTraits = avatarCard.tempTraits.map(t => t.trait).join(" ");
         text += " " + activeTraits;
@@ -349,16 +337,20 @@ function updateAllBoardPower(game) {
                 // 1. คำนวณพลังตามปกติ
                 avatar.currentPower = calculateAvatarPower(game, role, avatar);
 
-                // 🔗 2. [อัปเดต] ใช้ระบบ คู่หู (Link) แบบ Centralized
+                // 🔗 2. [อัปเดต] ระบบคู่หู (ตรวจสอบการหลุดลิงก์เท่านั้น ไม่จับคู่อัตโนมัติ)
                 let partnerName = getPartnerName(avatar.abilityText);
-                let currentLinked = false;
+                avatar.partnerNameStr = partnerName; // ฝังชื่อคู่หูไปให้หน้าเว็บเสมอ
 
-                if (partnerName) {
-                    currentLinked = pState.board.avatarZone.some(a => 
+                if (partnerName && avatar.isLinkedStatus) {
+                    // ถ้าเคยลิงก์ไว้แล้ว ให้เช็คว่าคู่หูยังอยู่บนสนามไหม?
+                    let hasPartner = pState.board.avatarZone.some(a => 
                         a.uniqueId !== avatar.uniqueId && a.name.includes(partnerName)
                     );
-                    // 👉 ส่งชื่อคู่หูฝังเข้าไปในการ์ดด้วย เพื่อให้ฝั่งหน้าเว็บเอาไปโชว์ได้เลย!
-                    avatar.partnerNameStr = partnerName; 
+                    
+                    if (!hasPartner) {
+                        addGameLog(game, `💔 [${avatar.name}] สูญเสียสถานะคู่หู เพราะคู่หูหายไปจากสนาม...`);
+                        avatar.isLinkedStatus = false; // ปลดสถานะออก
+                    }
                 }
 
                 // 📝 3. เทียบสถานะเก่ากับปัจจุบัน เพื่อเด้งแจ้งเตือนใน Action Log
@@ -506,46 +498,153 @@ function resolveNextEffect(game, roomName) {
     }
 }
 
-// ⚡ ฟังก์ชันกลางสำหรับตรวจสอบและขอสิทธิ์การตอบโต้ (Universal React Prompt)
-function promptReactionIfPossible(game, roomName, activePlayerRole, eventType, eventData, actionMessage) {
-    let opponentRole = activePlayerRole === 'playerA' ? 'playerB' : 'playerA';
-    let oppState = game.players[opponentRole];
+// =========================================================================
+// ⚡ ระบบ Advanced React Priority (Chain & Stack Engine)
+// =========================================================================
 
-    // 1. ค้นหาการ์ด React บนมือฝ่ายตรงข้าม ที่มีเงื่อนไขตรงกับเหตุการณ์ที่กำลังเกิดขึ้น
-    let validReactCards = oppState.hand.filter(c => {
+// 1. ฟังก์ชันสร้างหน้าต่างตอบโต้ (เริ่มเข้าสู่ Chain)
+function initReactionWindow(game, roomName, activePlayerRole, eventType, eventData, actionMessage) {
+    game.reactionContext = {
+        originalPlayer: activePlayerRole,
+        eventType: eventType,
+        eventData: eventData, // เก็บข้อมูล Action ต้นทางไว้
+        actionMessage: actionMessage,
+        passCount: 0,         // ตัวนับการกด Pass 
+        isCancelled: false    // ใช้เช็คว่าถูกยกเลิกหรือไม่
+    };
+    game.reactionChain = [];  // คิว Stack ของเวทย์ตอบโต้
+
+    // กฎ: เริ่มถามฝ่ายตรงข้ามก่อนเสมอ!
+    let opponentRole = activePlayerRole === 'playerA' ? 'playerB' : 'playerA';
+    checkAndPromptReaction(game, roomName, opponentRole);
+}
+
+// 2. ฟังก์ชันตรวจสอบการ์ดและโยนสิทธิ์
+function checkAndPromptReaction(game, roomName, targetPlayerRole) {
+    let pState = game.players[targetPlayerRole];
+    let context = game.reactionContext;
+    if (!context) return;
+
+    // เช็คว่าเรากำลังตอบโต้กับอะไร? (ถ้ามีการ์ดใน Chain แล้วแปลว่าตอบโต้ React Magic ใบล่าสุด)
+    let currentEventType = context.eventType;
+    let currentMessage = context.actionMessage;
+
+    if (game.reactionChain.length > 0) {
+        let topChain = game.reactionChain[game.reactionChain.length - 1];
+        currentEventType = 'PLAY_MAGIC';
+        currentMessage = `สิทธิ์ตอบโต้: อีกฝ่ายแทรกใช้ React [${topChain.card.name}]`;
+    }
+
+    // กรองการ์ดที่ใช้งานได้ในจังหวะนี้
+    let validReactCards = pState.hand.filter(c => {
         let isReact = (c.type || '').toLowerCase() === 'magic' && (c.magicSubtype || '').toLowerCase() === 'react';
         if (!isReact) return false;
 
-        // ดึงเงื่อนไขที่เราให้ Parser ช่วยวิเคราะห์ไว้
         let trigger = c.reactCondition || 'UNIVERSAL'; 
-        
-        // เช็คว่าตรงกับสถานการณ์ไหม
-        if (eventType === 'PLAY_MAGIC' && trigger === 'ON_OPPONENT_MAGIC') return true;
-        if (eventType === 'SUMMON_AVATAR' && trigger === 'ON_OPPONENT_SUMMON') return true;
-        if (eventType === 'ATTACK_DECLARED' && trigger === 'ON_OPPONENT_ATTACK') return true;
+        if (currentEventType === 'PLAY_MAGIC' && trigger === 'ON_OPPONENT_MAGIC') return true;
+        if (currentEventType === 'SUMMON_AVATAR' && trigger === 'ON_OPPONENT_SUMMON') return true;
+        if (currentEventType === 'ATTACK_DECLARED' && trigger === 'ON_OPPONENT_ATTACK') return true;
         if (trigger === 'UNIVERSAL') return true;
-
         return false;
     });
 
-    // 2. ถ้ามีปืน (React) ในมือที่ยิงได้ ให้หยุดเกมและถาม
     if (validReactCards.length > 0) {
-        game.pendingAction = eventData; // เก็บข้อมูล Action ที่ค้างไว้
-        game.reactionWaitingFor = opponentRole; // เซ็ตสถานะว่ารอใครอยู่
-        
-        // 🌟 ส่งข้อมูล "เฉพาะการ์ดที่ใช้ได้" ไปให้หน้าเว็บ
         let validReactIds = validReactCards.map(c => c.uniqueId || c.id);
-        
-        io.to(oppState.id).emit('prompt-reaction', { 
-            message: actionMessage,
-            validReactIds: validReactIds // 👈 ส่ง ID ของการ์ดที่กดได้ไป
+        game.reactionWaitingFor = targetPlayerRole;
+        io.to(pState.id).emit('prompt-reaction', { 
+            message: currentMessage,
+            validReactIds: validReactIds 
         });
-        return true; // บอกว่าเกมถูกหยุดชั่วคราว
-    } 
+    } else {
+        // ไม่มีปืนให้ยิง -> ปล่อยผ่านอัตโนมัติ
+        handleReactionPass(game, roomName, targetPlayerRole);
+    }
+}
+
+// 3. ฟังก์ชันจัดการการ Pass สิทธิ์
+function handleReactionPass(game, roomName, passingPlayerRole) {
+    if (!game.reactionContext) return;
+    game.reactionContext.passCount++;
     
-    // 3. ถ้าไม่มีการ์ดที่ใช้ได้ ปล่อยผ่านให้ทำงานทันที
-    game.reactionWaitingFor = null;
-    return false;
+    // ถ้า Pass ติดต่อกัน 2 ครั้ง แปลว่าทั้งสองฝ่ายหยุดต่อ Chain แล้ว ให้แสดงผลได้เลย!
+    if (game.reactionContext.passCount >= 2) {
+        game.reactionWaitingFor = null;
+        resolveReactionChain(game, roomName);
+    } else {
+        // โยนสิทธิ์กลับไปให้อีกฝ่าย (ถ้าตอนแรก B ผ่าน สิทธิ์จะกลับมาที่ A เจ้าของเทิร์นให้ออกอาวุธซ้อนได้!)
+        let nextPlayerRole = passingPlayerRole === 'playerA' ? 'playerB' : 'playerA';
+        checkAndPromptReaction(game, roomName, nextPlayerRole);
+    }
+}
+
+// 4. ฟังก์ชันแสดงผล Stack ย้อนหลัง (LIFO)
+function resolveReactionChain(game, roomName) {
+    console.log(`⛓️ [Resolve Chain] เริ่มแสดงผลตามลำดับ LIFO... (จำนวน: ${game.reactionChain.length})`);
+    let chain = game.reactionChain;
+    let context = game.reactionContext;
+
+    // วนลูปถอยหลัง (Last In, First Out)
+    for (let i = chain.length - 1; i >= 0; i--) {
+        let item = chain[i];
+        if (item.isCancelled) continue; // ถ้าเวทย์นี้โดน "ชายจากอนาคต" ยกเลิกไปก่อนแล้ว ข้ามไปเลย
+
+        let pState = game.players[item.playerRole];
+        let reactText = (item.card.abilityText || "").toLowerCase();
+        
+        let usageKey = `${item.playerRole}_React`;
+        game.magicUsage[usageKey] = true;
+
+        // 🛡️ เคส 1: ยกเลิกเวทมนตร์ (เช่น ชายจากอนาคต)
+        if (reactText.includes('ยกเลิก') && reactText.includes('magic')) {
+            addGameLog(game, `🛡️ [Chain] ${item.card.name} ยกเลิกเวทมนตร์สำเร็จ!`);
+            if (i > 0) {
+                // ยกเลิก React ก่อนหน้าในคิว
+                chain[i-1].isCancelled = true;
+                let cancelledOwner = game.players[chain[i-1].playerRole];
+                let mIdx = cancelledOwner.board.magicZone.findIndex(c => c.uniqueId === chain[i-1].card.uniqueId);
+                if (mIdx !== -1) cancelledOwner.board.hellZone.push(cancelledOwner.board.magicZone.splice(mIdx, 1)[0]);
+            } else if (context.eventType === 'PLAY_MAGIC') {
+                // ถ้ายกเลิกเวทย์ตั้งต้นของอีกฝ่าย
+                context.isCancelled = true;
+                let originalOwner = game.players[context.originalPlayer];
+                originalOwner.board.hellZone.push(context.eventData.magicCard);
+            }
+        }
+
+        // 💥 เคส 2: ทำลายอัญเชิญ (เช่น อุบัติเหตุ)
+        else if (reactText.includes('เมื่อ avatar อัญเชิญลงบนสนาม : ทำลาย avatar ตัวนั้น') || reactText.includes('ทำลาย avatar')) {
+            if (i === 0 && context.eventType === 'SUMMON_AVATAR') {
+                context.isCancelled = true;
+                let targetAvatar = context.eventData.summonedCard;
+                addGameLog(game, `💥 [Chain] [${item.card.name}] ทำลาย [${targetAvatar.name}] ทันทีที่กำลังลงสนาม!`);
+                let originalOwner = game.players[context.originalPlayer];
+                originalOwner.board.hellZone.push(targetAvatar);
+            }
+        }
+
+        // ตั้งเวลาทิ้งการ์ด React ลงนรกหลังจากโชว์บนสนาม
+        setTimeout(() => {
+            let latestPState = rooms[roomName]?.players[item.playerRole];
+            if (latestPState) {
+                let mIdx = latestPState.board.magicZone.findIndex(c => c.uniqueId === item.card.uniqueId || c.id === item.card.id);
+                if (mIdx !== -1) {
+                    latestPState.board.hellZone.push(latestPState.board.magicZone.splice(mIdx, 1)[0]);
+                    broadcastGameState(roomName, rooms[roomName]);
+                }
+            }
+        }, 3500);
+    }
+
+    // 5. เมื่อรันเวทย์ตอบโต้หมดแล้ว มาตัดสินชะตาของ Action ตั้งต้น!
+    if (!context.isCancelled) {
+        executePendingAction(roomName, game, context); 
+    } else {
+        console.log(`🛑 [Action Cancelled] การกระทำต้นทางถูกยกเลิก`);
+        game.reactionContext = null;
+        game.reactionChain = [];
+        broadcastGameState(roomName, game);
+        resolveNextEffect(game, roomName);
+    }
 }
 
 // 🤖 ระบบตรวจสอบความสามารถอัตโนมัติส่วนกลาง (Auto-Trigger Engine)
@@ -604,6 +703,13 @@ function triggerAutoAbilities(game, roomName, eventType, eventData) {
                     if (text.includes(eventData.sourceName.toLowerCase())) {
                         isMatch = true;
                     }
+                }
+            }
+
+            // 🔍 5. เช็คเหตุการณ์: "เมื่อเข้าสู่สถานะ คู่หู"
+            if (eventType === 'EVENT_ENTER_LINK') {
+                if (eventData.targetId === card.uniqueId && (text.includes('เมื่อ avatar ใบนี้เข้าสู่สถานะ คู่หู') || text.includes('เมื่อเข้าสู่สถานะ คู่หู'))) {
+                    isMatch = true;
                 }
             }
 
@@ -1208,7 +1314,7 @@ io.on('connection', (socket) => {
                 summonedCard: summonedCard
             };
 
-            addGameLog(game, `⚠️ ${playerRole} กำลังจะอัญเชิญ [${summonedCard.name}]... (รอการตอบสนอง)`);
+            initReactionWindow(game, roomName, playerRole, 'SUMMON_AVATAR', actionData, `ฝ่ายตรงข้ามอัญเชิญ [${summonedCard.name}]`);
 
             // ⚡ โยนเข้า React Engine
             let isPaused = promptReactionIfPossible(
@@ -1642,9 +1748,44 @@ io.on('connection', (socket) => {
         resolveNextEffect(game, roomName);
     });
 
-    // -------------------------------------------------------------------------
-    // ระบบใช้การ์ด Magic (ใช้ Magic Engine)
-    // -------------------------------------------------------------------------
+    // 🔗 ระบบรับคำสั่งประกาศเข้าสู่สถานะคู่หู (ตามกฎ Official)
+    socket.on('declare-partner-link', ({ roomName, playerRole, cardId }) => {
+        let game = rooms[roomName];
+        if (!game || game.activePlayer !== playerRole) return;
+
+        let pState = game.players[playerRole];
+        
+        // 🛑 กฎ: ทำได้เทิร์นละ 1 ครั้งเท่านั้น
+        if (pState.hasDeclaredLinkThisTurn) {
+            return socket.emit('error-message', '❌ คุณประกาศเข้าสถานะคู่หูไปแล้วในเทิร์นนี้ (ทำได้เทิร์นละ 1 ครั้ง)');
+        }
+
+        let avatar = pState.board.avatarZone.find(c => c.uniqueId === cardId);
+        if (!avatar || !avatar.partnerNameStr) return;
+
+        // ค้นหาคู่หูบนสนามที่ยังไม่ได้ลิงก์
+        let partnerCard = pState.board.avatarZone.find(a => 
+            a.uniqueId !== avatar.uniqueId && a.name.includes(avatar.partnerNameStr) && !a.isLinkedStatus
+        );
+
+        if (!partnerCard) {
+            return socket.emit('error-message', `❌ ไม่พบ [${avatar.partnerNameStr}] ที่พร้อมเข้าคู่หู บนสนามของคุณ!`);
+        }
+
+        // 🔗 ดำเนินการจับลิงก์ให้ทั้งสองใบ
+        avatar.isLinkedStatus = true;
+        partnerCard.isLinkedStatus = true;
+        pState.hasDeclaredLinkThisTurn = true; // บันทึกโควตาการใช้ในเทิร์นนี้
+
+        addGameLog(game, `🔗 ${playerRole} ประกาศให้ [${avatar.name}] และ [${partnerCard.name}] เข้าสู่สถานะคู่หูแล้ว!`);
+        
+        // 🤖 แจ้งเตือน Auto-Trigger Engine เผื่อมีความสามารถ "เมื่อเข้าสู่สถานะคู่หู" ทำงาน
+        triggerAutoAbilities(game, roomName, 'EVENT_ENTER_LINK', { targetId: avatar.uniqueId });
+        triggerAutoAbilities(game, roomName, 'EVENT_ENTER_LINK', { targetId: partnerCard.uniqueId });
+
+        broadcastGameState(roomName, game);
+    });
+
     // -------------------------------------------------------------------------
     // ระบบใช้การ์ด Magic (ใช้ Magic Engine)
     // -------------------------------------------------------------------------
@@ -1678,14 +1819,8 @@ io.on('connection', (socket) => {
             // ⚡ [เปลี่ยนมาใช้ React Engine ตัวใหม่]
             let isPaused = false;
             if (game.pendingAction) {
-                isPaused = promptReactionIfPossible(
-                    game, 
-                    roomName, 
-                    playerRole, 
-                    'PLAY_MAGIC', 
-                    game.pendingAction, 
-                    `ฝ่ายตรงข้ามกำลังใช้งานเวทมนตร์ [${magicCardCheck.name}]`
-                );
+                initReactionWindow(game, roomName, playerRole, 'PLAY_MAGIC', game.pendingAction, `ฝ่ายตรงข้ามร่ายเวทย์ [${magicCardCheck.name}]`);
+                game.pendingAction = null; // คืนค่าเพราะเปลี่ยนไปใช้ Context แทน
             }
 
             // ถ้าไม่ต้องรอ React ให้ข้ามไปแสดงผลการ์ดทันที (Auto-Resolve)
@@ -1753,14 +1888,9 @@ io.on('connection', (socket) => {
         // ⚡ 2. โยนเข้า React Engine (ถามฝ่ายตรงข้ามว่ามี "ไปเลยมอนตี้" ไหม?)
         let isPaused = false;
         if (!isReactLocked) {
-            isPaused = promptReactionIfPossible(
-                game, 
-                roomName, 
-                attackerPlayer, 
-                'ATTACK_DECLARED', 
-                { type: 'COMBAT_REACT' }, // ระบุว่าค้าง Action การต่อสู้ไว้
-                `ฝ่ายตรงข้ามสั่ง [${attackerCard.name}] โจมตี!`
-            );
+            initReactionWindow(game, roomName, attackerPlayer, 'ATTACK_DECLARED', { type: 'COMBAT_REACT' }, `ฝ่ายตรงข้ามสั่ง [${attackerCard.name}] โจมตี!`);
+        } else {
+            checkHumanShieldAndExecute(game, roomName);
         }
 
         // 3. ถ้าไม่มี React หรือโดนล็อค React ไว้ ให้ไปสู่ขั้นตอน โล่มนุษย์ ทันที
@@ -2077,137 +2207,90 @@ io.on('connection', (socket) => {
     // ⚡ ระบบรับข้อมูลเมื่อผู้เล่นกด "ใช้การ์ดตอบโต้" หรือ "ไม่ตอบโต้"
     socket.on('submit-reaction', ({ roomName, playerRole, reactCardId }) => {
         let game = rooms[roomName];
-        if (!game || !game.pendingAction || game.reactionWaitingFor !== playerRole) return;
+        if (!game || !game.reactionContext || game.reactionWaitingFor !== playerRole) return;
 
         let pState = game.players[playerRole];
-        let opponentRole = playerRole === 'playerA' ? 'playerB' : 'playerA';
-        let oppState = game.players[opponentRole];
 
         if (reactCardId) {
-            // ดึงการ์ด React ออกจากมือ
             let cardIndex = pState.hand.findIndex(c => c.id === reactCardId || c.uniqueId === reactCardId);
             if (cardIndex !== -1) {
                 let reactCard = pState.hand.splice(cardIndex, 1)[0];
-                console.log(`⚡ [React Magic] ผู้เล่น ${playerRole} สวนกลับด้วยนํ้ายา/เวท [${reactCard.name}]!`);
                 
-                // บันทึกโควต้าการใช้ React Magic ของเทิร์นนี้
-                let usageKey = `${playerRole}_React`;
-                game.magicUsage[usageKey] = true;
-
-                // นำ React Magic วางลงสนาม
                 pState.board.magicZone.push(reactCard);
                 addGameLog(game, `⚡ ${playerRole} ใช้ React Magic [${reactCard.name}]!`);
+                
+                // ยัดลง Chain Stack!
+                game.reactionChain.push({ playerRole: playerRole, card: reactCard, isCancelled: false });
 
-                let reactText = (reactCard.abilityText || "").toLowerCase();
-
-                // 🛡️ เคส 1: การ์ด "ชายจากอนาคต" (ยกเลิกเวทมนตร์)
-                if (reactText.includes('ยกเลิก') && reactText.includes('magic')) {
-                    addGameLog(game, `🛡️ [React] ${reactCard.name} ยกเลิกเวทมนตร์ของอีกฝ่ายสำเร็จ!`);
-                    if (game.pendingAction && game.pendingAction.type === 'PLAY_MAGIC') {
-                        let originalOwnerState = game.players[game.pendingAction.playerRole];
-                        originalOwnerState.board.hellZone.push(game.pendingAction.magicCard);
-                        game.pendingAction = null; // ล้างคิวทิ้ง เวทย์ไม่เกิดผล
-                    }
-                }
-
-                // 💥 เคส 2: การ์ด "อุบัติเหตุ!!!" หรือการ์ดทำลาย Avatar ที่กำลังอัญเชิญ
-                else if (reactText.includes('เมื่อ Avatar อัญเชิญลงบนสนาม : ทำลาย Avatar ตัวนั้น') || reactText.includes('ทำลาย avatar')) {
-                    if (game.pendingAction && game.pendingAction.type === 'SUMMON_AVATAR') {
-                        let targetAvatar = game.pendingAction.summonedCard;
-                        addGameLog(game, `💥 [React] [${reactCard.name}] ทำลาย [${targetAvatar.name}] ทันทีที่ลงสนาม!`);
-                        
-                        // ส่ง Avatar ที่กำลังจะลง ไปลงนรกแทนที่จะลงบอร์ด
-                        oppState.board.hellZone.push(targetAvatar);
-                        
-                        // ยกเลิกการอัญเชิญ (เคลียร์ pendingAction เป็น null เพื่อไม่ให้มันลงบอร์ดซ้ำ)
-                        game.pendingAction = null; 
-                    }
-                }
-
-                // ตั้งเวลาส่งการ์ด React ลงนรกหลังจากแสดงผล
-                setTimeout(() => {
-                    let mIdx = pState.board.magicZone.findIndex(c => c.uniqueId === reactCard.uniqueId || c.id === reactCard.id);
-                    if (mIdx !== -1) {
-                        let usedMagic = pState.board.magicZone.splice(mIdx, 1)[0];
-                        pState.board.hellZone.push(usedMagic);
-                        broadcastGameState(roomName, game);
-                    }
-                }, 3500);
+                // สำคัญ! รีเซ็ต Pass Count กลับเป็น 0 เพราะมีการต่อคิวใหม่ และโยนสิทธิ์กลับไปถามอีกฝ่ายทันที
+                game.reactionContext.passCount = 0;
+                let nextPlayerRole = playerRole === 'playerA' ? 'playerB' : 'playerA';
+                
+                broadcastGameState(roomName, game);
+                checkAndPromptReaction(game, roomName, nextPlayerRole);
             }
         } else {
-            console.log(`⏩ [React Window] ผู้เล่น ${playerRole} เลือกไม่ตอบโต้ (Pass)`);
+            console.log(`⏩ [React Window] ${playerRole} เลือกไม่ตอบโต้ (Pass)`);
+            addGameLog(game, `⏩ ${playerRole} ปล่อยผ่านสิทธิ์`);
+            handleReactionPass(game, roomName, playerRole);
         }
-
-        // เคลียร์สถานะการรอ และรัน Action เก่าที่ถูกเบรคไว้ต่อ
-        game.reactionWaitingFor = null;
-        executePendingAction(roomName);
     });
 
     // 🛑 ฟังก์ชันตัวกลางสำหรับรันคำสั่งที่ถูกหยุดรอไว้ 
-    function executePendingAction(roomName, gameObj = null, directAction = null) {
+    function executePendingAction(roomName, gameObj = null, context = null) {
         let game = gameObj || rooms[roomName];
-        let action = directAction || (game ? game.pendingAction : null);
-        
-        if (!game || !action) return;
+        if (!game || !context) return;
 
-        console.log(`▶️ [Resume Action] ดำเนินการ ${action.type} ของ ${action.playerRole} ต่อ...`);
+        let actionType = context.eventType;
+        let eventData = context.eventData;
+        let originalPlayerRole = context.originalPlayer;
 
-        // 👉 1. กรณีเป็นเวทมนตร์ค้างไว้
-        if (action.type === 'PLAY_MAGIC') {
-            resolvePendingMagic(game, action, roomName, io, broadcastGameState);
+        // ล้างบริบททิ้งก่อนดำเนินการ
+        game.reactionContext = null;
+        game.reactionChain = [];
 
-            // 📢 [ย้ายมาไว้ตรงนี้!] ตะโกนบอกระบบว่ามีร่ายเวทย์ "สำเร็จ" แล้ว! (พระนารายณ์ค่อยทำงานจังหวะนี้)
+        // 👉 กรณีเป็นเวทมนตร์ค้างไว้
+        if (actionType === 'PLAY_MAGIC') {
+            resolvePendingMagic(game, eventData, roomName, io, broadcastGameState);
             triggerAutoAbilities(game, roomName, 'EVENT_MAGIC_PLAYED', { 
-                magicName: action.magicCard.name,
-                magicSymbol: action.magicCard.symbol || '',
-                magicSubtype: action.magicCard.magicSubtype || ''
+                magicName: eventData.magicCard.name,
+                magicSymbol: eventData.magicCard.symbol || '',
+                magicSubtype: eventData.magicCard.magicSubtype || ''
             });
-
         }
         
-        // 👉 2. กรณีเป็นการอัญเชิญ Avatar ที่ค้างไว้
-        else if (action.type === 'SUMMON_AVATAR') {
-            let pState = game.players[action.playerRole];
+        // 👉 กรณีเป็นการอัญเชิญ Avatar
+        else if (actionType === 'SUMMON_AVATAR') {
+            let pState = game.players[originalPlayerRole];
             
-            // นำการ์ดที่ถูกอัญเชิญลงสู่สนามจริงๆ หลังจากรอดจากการโดนขัด
-            pState.board.avatarZone.push(action.summonedCard);
-            addGameLog(game, `✨ ${action.playerRole} อัญเชิญ [${action.summonedCard.name}] ลงสนามสำเร็จ!`);
+            pState.board.avatarZone.push(eventData.summonedCard);
+            addGameLog(game, `✨ ${originalPlayerRole} อัญเชิญ [${eventData.summonedCard.name}] ลงสนามสำเร็จ!`);
             
-            // สั่ง Ability Engine ให้ตรวจเช็คสกิล ON_SUMMON (จุติ)
-            queueEffect(game, roomName, action.playerRole, action.summonedCard, 'ON_SUMMON');
+            queueEffect(game, roomName, originalPlayerRole, eventData.summonedCard, 'ON_SUMMON');
             
-            // 🛑 เช็คความสามารถสอดแนม หรือ เลือกปฏิบัติ แบบต่อเนื่อง
-            let abilityText = (action.summonedCard.abilityText || "").toLowerCase();
-            
+            let abilityText = (eventData.summonedCard.abilityText || "").toLowerCase();
             if (abilityText.includes('สอดแนม') || abilityText.includes('สอดเเนม')) {
                 let match = abilityText.match(/สอดเ?น?ม\s*(\d+)/);
                 let scoutNum = match ? parseInt(match[1]) : 3; 
-                console.log(`👁️ [Scout Trigger] การ์ด [${action.summonedCard.name}] สั่งสอดแนมจำนวน ${scoutNum} ใบ`);
-                let scoutedCards = handleScoutAbility(game, action.playerRole, scoutNum);
-                
-                if (scoutedCards.length > 0) {
-                    io.to(pState.id).emit('open-scout-modal', { scoutedCards });
-                }
+                let scoutedCards = handleScoutAbility(game, originalPlayerRole, scoutNum);
+                if (scoutedCards.length > 0) io.to(pState.id).emit('open-scout-modal', { scoutedCards });
             }
 
             if (abilityText.includes('เลือกปฏิบัติ')) {
-                let options = extractChoiceOptions(action.summonedCard.abilityText);
+                let options = extractChoiceOptions(eventData.summonedCard.abilityText);
                 io.to(pState.id).emit('open-choice-modal', {
-                    cardName: action.summonedCard.name,
+                    cardName: eventData.summonedCard.name,
                     options: options,
-                    cardId: action.summonedCard.id
+                    cardId: eventData.summonedCard.uniqueId || eventData.summonedCard.id
                 });
             }
         }
 
-        // 👉 3. [เพิ่มใหม่] กรณีเป็นการต่อสู้ที่ค้างไว้รอ React
-        else if (action.type === 'COMBAT_REACT') {
-            // เมื่อรัน React จบแล้ว ให้ไปเช็คโล่มนุษย์ต่อเลย
+        // 👉 กรณีต่อสู้
+        else if (actionType === 'ATTACK_DECLARED') {
             checkHumanShieldAndExecute(game, roomName);
         }
 
-        // เคลียร์ Pending Action ออก เพราะทำงานเสร็จแล้ว
-        if (game.pendingAction === action) game.pendingAction = null;
         broadcastGameState(roomName, game);
         resolveNextEffect(game, roomName);
     }
@@ -2355,6 +2438,7 @@ io.on('connection', (socket) => {
         let nextState = game.players[game.activePlayer];
         if (nextState) {
             nextState.hasDrawnThisTurn = false;
+            nextState.hasDeclaredLinkThisTurn = false;
             // ปลุก Avatar ฝั่งตรงข้ามให้ตื่นรอไว้เลย
             if (nextState.board && nextState.board.avatarZone) {
                 nextState.board.avatarZone.forEach(a => a.isResting = false);
