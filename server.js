@@ -352,17 +352,6 @@ function updateAllBoardPower(game) {
                         avatar.isLinkedStatus = false; // ปลดสถานะออก
                     }
                 }
-
-                // 📝 3. เทียบสถานะเก่ากับปัจจุบัน เพื่อเด้งแจ้งเตือนใน Action Log
-                if (currentLinked && !avatar.isLinkedStatus) {
-                    // เพิ่งเข้าสู่สถานะคู่หู
-                    addGameLog(game, `🔗 [${avatar.name}] เข้าสู่สถานะคู่หูกับ [${partnerName}] แล้ว!`);
-                    avatar.isLinkedStatus = true; // บันทึกลงตัวการ์ดว่าลิงก์แล้ว
-                } else if (!currentLinked && avatar.isLinkedStatus) {
-                    // คู่หูหายไปจากบอร์ด (ตาย/ขึ้นมือ)
-                    addGameLog(game, `💔 [${avatar.name}] สูญเสียสถานะคู่หู...`);
-                    avatar.isLinkedStatus = false; // ปลดสถานะออก
-                }
             });
         }
     });
@@ -1257,7 +1246,7 @@ io.on('connection', (socket) => {
         let game = rooms[roomName];
         if (!game || game.activePlayer !== playerRole) return;
 
-        // 🛑 [เพิ่มบรรทัดนี้] ล็อคไม่ให้อัญเชิญถ้าระบบติดพันอยู่
+        // 🛑 ล็อคไม่ให้อัญเชิญถ้าระบบติดพันอยู่
         if (isGameBusy(game)) {
             return socket.emit('error-message', '⏳ กรุณารอให้อีกฝ่ายตัดสินใจ หรือรอระบบประมวลผลให้เสร็จก่อน!');
         }
@@ -1315,11 +1304,11 @@ io.on('connection', (socket) => {
 
             addGameLog(game, `⚠️ ${playerRole} กำลังจะอัญเชิญ [${summonedCard.name}]...`);
 
-            // ⚡ โยนเข้า React Chain Engine (ระบบใหม่จะจัดการเช็คเวทย์และเอาการ์ดลงบอร์ดให้เอง)
+            // ⚡ โยนเข้า React Chain Engine (ระบบใหม่)
             initReactionWindow(game, roomName, playerRole, 'SUMMON_AVATAR', actionData, `ฝ่ายตรงข้ามอัญเชิญ [${summonedCard.name}]`);
 
             broadcastGameState(roomName, game);
-        } 
+        }  
     });
 
     // -------------------------------------------------------------------------
