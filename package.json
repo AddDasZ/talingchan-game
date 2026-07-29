@@ -1,0 +1,9 @@
+{
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.x.x",
+    "socket.io": "^4.x.x"
+  }
+}

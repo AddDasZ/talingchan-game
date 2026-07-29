@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <title>Battle of Talingchan - Professional Deck Builder</title>
+    <style>
+        body { font-family: sans-serif; margin: 0; padding: 15px; background: #121212; color: #fff; display: flex; gap: 15px; height: 95vh; box-sizing: border-box; }
+        .pane { background: #1e1e1e; padding: 15px; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); overflow-y: auto; border: 1px solid #333; }
+        
+        .left-column { width: 300px; display: flex; flex-direction: column; gap: 12px; flex-shrink: 0; }
+        .deck-builder-pane { background: #181818; padding: 10px; border-radius: 6px; border: 1px solid #444; display: flex; flex-direction: column; }
+        .saved-decks-pane { flex-grow: 1; background: #181818; padding: 10px; border-radius: 6px; border: 1px solid #444; display: flex; flex-direction: column; }
+
+        .library-pane { flex-grow: 1; display: flex; flex-direction: column; }
+
+        h2 { font-size: 15px; margin-top: 0; color: #ffc107; border-bottom: 1px solid #444; padding-bottom: 5px; display: flex; justify-content: space-between; align-items: center; }
+        input, select { padding: 8px; background: #2a2a2a; border: 1px solid #444; color: #fff; border-radius: 4px; font-size: 13px; width: 100%; box-sizing: border-box; margin-bottom: 8px; }
+        
+        .btn-group { display: flex; gap: 5px; margin-bottom: 8px; }
+        button { padding: 8px 12px; background: #007bff; border: none; color: #fff; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 12px; flex: 1; }
+        button:hover { background: #0056b3; }
+        button.btn-danger { background: #dc3545; }
+        button.btn-danger:hover { background: #a71d2a; }
+        button.btn-success { background: #28a745; }
+        button.btn-success:hover { background: #1e7e34; }
+
+        .deck-list { flex-grow: 1; background: #121212; border: 1px solid #333; border-radius: 4px; overflow-y: auto; padding: 5px; max-height: 220px; }
+        .deck-item { display: flex; justify-content: space-between; align-items: center; padding: 6px 8px; background: #222; margin-bottom: 4px; border-radius: 3px; font-size: 12px; border-left: 3px solid #007bff; cursor: pointer; transition: background 0.2s; }
+        .deck-item:hover { background: #2a2a2a; }
+        .deck-item button { background: none; color: #ff4d4d; border: none; font-size: 14px; cursor: pointer; padding: 0 5px; flex: unset; }
+        .deck-item button:hover { color: #ff1a1a; }
+
+        .filter-bar { display: flex; gap: 8px; margin-bottom: 10px; }
+
+        .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; overflow-y: auto; padding-right: 5px; }
+        .card-item { background: #252525; border: 1px solid #444; border-radius: 6px; padding: 6px; text-align: center; cursor: pointer; transition: transform 0.2s, border-color 0.2s; position: relative; }
+        .card-item:hover { transform: translateY(-3px); border-color: #ffc107; box-shadow: 0 4px 10px rgba(255,193,7,0.3); }
+        .card-item img { width: 100%; height: 160px; object-fit: cover; border-radius: 4px; background: #111; }
+        .card-name { font-size: 11px; margin-top: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: bold; }
+        
+        .saved-deck-row { display: flex; justify-content: space-between; align-items: center; padding: 6px; background: #222; margin-bottom: 4px; border-radius: 4px; font-size: 12px; }
+        
+        /* สไตล์สำหรับหน้าต่างพรีวิวการ์ดด้านขวาล่าง */
+        .card-preview-panel {
+            position: fixed;
+            bottom: 25px;
+            right: 25px;
+            width: 320px;
+            height: 450px;
+            background: rgba(0,0,0,0.95);
+            border: 2px solid #ffc107;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 15px 40px rgba(0,0,0,0.95);
+            z-index: 100;
+            overflow: hidden;
+            pointer-events: none;
+        }
+        .card-preview-panel img { 
+            width: 100%; 
+            height: 100%; 
+            object-fit: cover; 
+            border-radius: 10px; 
+        }
+        .card-preview-placeholder { 
+            color: #888; 
+            font-size: 14px; 
+            text-align: center; 
+            padding: 15px; 
+            line-height: 1.6; 
+        }
+
+        /* Modal สำหรับ Code นำเข้า/ส่งออกเด็ค */
+        .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); justify-content: center; align-items: center; z-index: 200; }
+        .modal-content { background: #1e1e1e; padding: 20px; border-radius: 8px; width: 500px; border: 1px solid #444; display: flex; flex-direction: column; gap: 10px; }
+        .modal-content textarea { width: 100%; height: 200px; background: #111; color: #fff; border: 1px solid #444; border-radius: 4px; padding: 8px; font-family: monospace; resize: none; box-sizing: border-box; }
+    </style>
+</head>
+<body>
+
+    <div class="left-column">
+        <div class="pane deck-builder-pane" style="height: 55%;">
+            <h2>
+                <span>🛡️ จัดเด็คของคุณ</span>
+                <span id="deck-count" style="font-size: 12px; color: #aaa;">0/55</span>
+            </h2>
+            <input type="text" id="deck-name-input" placeholder="ตั้งชื่อเด็คของคุณ..." value="Default Deck">
+            
+            <div id="current-deck-list" class="deck-list">
+                <div style="text-align: center; color: #666; padding: 20px; font-size: 12px;">ยังไม่มีการ์ดในเด็ค</div>
+            </div>
+
+            <div style="margin-top: 8px; display: flex; flex-direction: column; gap: 5px;">
+                <div class="btn-group">
+                    <button class="btn-success" onclick="saveCurrentDeck()">💾 บันทึกเด็ค</button>
+                    <button class="btn-danger" onclick="clearCurrentDeck()">🗑️ ล้างเด็ค</button>
+                </div>
+                <div class="btn-group">
+                    <button onclick="openExportModal()">📤 ส่งออกโค้ด</button>
+                    <button onclick="openImportModal()">📥 นำเข้าโค้ด</button>
+                </div>
+                <button onclick="goToLobby()" style="background: #6c757d; margin-top: 4px;">🔙 กลับสู่ Lobby</button>
+            </div>
+        </div>
+
+        <div class="pane saved-decks-pane" style="height: 40%;">
+            <h2>📂 เด็คที่บันทึกไว้</h2>
+            <div id="saved-decks-list" style="overflow-y: auto; flex-grow: 1;">
+                <div style="text-align: center; color: #666; font-size: 12px; padding: 10px;">ยังไม่มีเด็คที่บันทึก</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="pane library-pane">
+        <h2>
+            <span>📚 คลังการ์ดทั้งหมด (Library)</span>
+            <span id="library-count" style="font-size: 12px; color: #aaa;">โหลดข้อมูล...</span>
+        </h2>
+        
+        <div class="filter-bar">
+            <input type="text" id="search-input" placeholder="🔍 ค้นหาชื่อการ์ดหรือรหัส..." oninput="filterLibrary()" style="margin-bottom: 0;">
+            
+            <select id="color-filter" onchange="filterLibrary()" style="width: 140px; margin-bottom: 0;">
+                <option value="">ทุกสี</option>
+                <option value="แดง">แดง</option>
+                <option value="ฟ้า">ฟ้า</option>
+                <option value="เขียว">เขียว</option>
+                <option value="ม่วง">ม่วง</option>
+            </select>
+
+            <select id="type-filter" onchange="filterLibrary()" style="width: 140px; margin-bottom: 0;">
+                <option value="">ทุกประเภท</option>
+                <option value="Avatar">Avatar</option>
+                <option value="Construct">Construct</option>
+                <option value="Magic">Magic</option>
+                <option value="Life">Life</option>
+            </select>
+        </div>
+
+        <div id="card-library-grid" class="card-grid">
+            </div>
+    </div>
+
+    <div id="card-preview" class="card-preview-panel">
+        <div class="card-preview-placeholder">ชี้การ์ดในคลังหรือในเด็ค<br>เพื่อดูภาพใหญ่ชัดๆ</div>
+    </div>
+
+    <div id="code-modal" class="modal">
+        <div class="modal-content">
+            <h2 id="modal-title">📤 โค้ดเด็คของคุณ</h2>
+            <textarea id="code-textarea" placeholder="วางหรือคัดลอกโค้ดเด็คที่นี่..."></textarea>
+            <div style="font-size: 11px; color: #aaa; line-height: 1.4;">
+                รูปแบบ: แต่ละบรรทัดต้องเป็น <b>จำนวนx รหัสการ์ด-ความหายาก</b> หรือ <b>จำนวนx รหัสการ์ด</b><br>
+                ตัวอย่าง: <code style="color: #ffc107;">3x BT01-015-C</code> หรือ <code style="color: #ffc107;">1x BT01-016-SCR</code>
+            </div>
+            <div class="btn-group" style="margin-bottom: 0; margin-top: 5px;">
+                <button id="modal-action-btn" class="btn-success" onclick="executeModalAction()">คัดลอก</button>
+                <button class="btn-danger" onclick="closeCodeModal()">ปิด</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const MAX_DECK_SIZE = 55;
+        let allCards = [];
+        let currentDeck = [];
+        const currentUser = sessionStorage.getItem('currentUsername') || 'Guest';
+
+        window.onload = async () => {
+            try {
+                const response = await fetch('./cards.json');
+                allCards = await response.json();
+                renderLibrary(allCards);
+                loadSavedDecks();
+            } catch (err) {
+                console.error("❌ ไม่สามารถโหลดฐานข้อมูลการ์ดได้:", err);
+                document.getElementById('library-count').innerText = "โหลดข้อมูลไม่สำเร็จ";
+            }
+        };
+
+        function renderLibrary(cards) {
+            const grid = document.getElementById('card-library-grid');
+            grid.innerHTML = '';
+            document.getElementById('library-count').innerText = `${cards.length} ใบ`;
+
+            cards.forEach(card => {
+                const item = document.createElement('div');
+                item.className = 'card-item';
+                item.innerHTML = `
+                    <img src="${card.imageUrl || ''}" alt="${card.name}" onerror="this.src='https://via.placeholder.com/130x160?text=No+Image'">
+                    <div class="card-name" title="${card.name}">[${card.id}] ${card.name}</div>
+                    <div style="font-size: 10px; color: #aaa;">Rarity: ${card.rarity || 'N/A'} | สี: ${card.color || '-'}</div>
+                `;
+
+                item.onmouseenter = () => {
+                    document.getElementById('card-preview').innerHTML = `<img src="${card.imageUrl || ''}" alt="${card.name}" onerror="this.src='https://via.placeholder.com/320x450?text=No+Image'">`;
+                };
+
+                item.onclick = () => addCardToDeck(card);
+                grid.appendChild(item);
+            });
+        }
+
+        function filterLibrary() {
+            const keyword = document.getElementById('search-input').value.toLowerCase();
+            const selectedColor = document.getElementById('color-filter').value;
+            const selectedType = document.getElementById('type-filter').value;
+
+            const filtered = allCards.filter(card => {
+                const matchName = card.name.toLowerCase().includes(keyword) || card.id.toLowerCase().includes(keyword);
+                
+                // เงื่อนไขกรองสี (เทียบข้อความใน card.color เช่น แดง, ฟ้า, เขียว, ม่วง)
+                const matchColor = selectedColor ? (card.color && card.color.toLowerCase().includes(selectedColor.toLowerCase())) : true;
+                
+                // เงื่อนไขกรองประเภท
+                const matchType = selectedType ? (card.type && card.type.toLowerCase() === selectedType.toLowerCase()) : true;
+                
+                return matchName && matchColor && matchType;
+            });
+
+            renderLibrary(filtered);
+        }
+
+        function addCardToDeck(card) {
+            if (currentDeck.length >= MAX_DECK_SIZE) {
+                alert(`⚠️ เด็คเต็มแล้ว (สูงสุด ${MAX_DECK_SIZE} ใบ)`);
+                return;
+            }
+
+            const duplicateCount = currentDeck.filter(c => c.name === card.name).length;
+            if (duplicateCount >= 4) {
+                alert(`⚠️ คุณมีการ์ด "${card.name}" ในเด็คครบ 4 ใบแล้ว (จำกัดสูงสุด 4 ใบต่อชื่อการ์ด)`);
+                return;
+            }
+
+            currentDeck.push({ ...card });
+            renderCurrentDeck();
+        }
+
+        function removeCardFromDeck(event, index) {
+            event.stopPropagation();
+            currentDeck.splice(index, 1);
+            renderCurrentDeck();
+        }
+
+        function renderCurrentDeck() {
+            const listDiv = document.getElementById('current-deck-list');
+            document.getElementById('deck-count').innerText = `${currentDeck.length}/${MAX_DECK_SIZE}`;
+            
+            if (currentDeck.length === 0) {
+                listDiv.innerHTML = `<div style="text-align: center; color: #666; padding: 20px; font-size: 12px;">ยังไม่มีการ์ดในเด็ค</div>`;
+                return;
+            }
+
+            listDiv.innerHTML = '';
+            currentDeck.forEach((card, index) => {
+                let displayRarity = card.rarity ? card.rarity.toUpperCase() : 'C';
+                if (displayRarity === 'SEC') displayRarity = 'SCR';
+
+                const item = document.createElement('div');
+                item.className = 'deck-item';
+                item.innerHTML = `
+                    <span>[${card.id}] ${card.name} (${displayRarity})</span>
+                    <button onclick="removeCardFromDeck(event, ${index})" title="ลบออก">×</button>
+                `;
+                
+                item.onmouseenter = () => {
+                    document.getElementById('card-preview').innerHTML = `<img src="${card.imageUrl || ''}" alt="${card.name}" onerror="this.src='https://via.placeholder.com/320x450?text=No+Image'">`;
+                };
+
+                listDiv.appendChild(item);
+            });
+        }
+
+        function clearCurrentDeck() {
+            if (confirm("คุณต้องการล้างการ์ดทั้งหมดในเด็คนี้ใช่หรือไม่?")) {
+                currentDeck = [];
+                renderCurrentDeck();
+            }
+        }
+
+        function saveCurrentDeck() {
+            const deckName = document.getElementById('deck-name-input').value.trim();
+            if (!deckName) return alert("กรุณาตั้งชื่อเด็คก่อนบันทึก!");
+            if (currentDeck.length === 0) return alert("ไม่สามารถบันทึกเด็คเปล่าได้!");
+
+            let allUsersDecks = JSON.parse(localStorage.getItem('allUsersDecks') || '{}');
+            if (!allUsersDecks[currentUser]) {
+                allUsersDecks[currentUser] = {};
+            }
+
+            allUsersDecks[currentUser][deckName] = currentDeck;
+            localStorage.setItem('allUsersDecks', JSON.stringify(allUsersDecks));
+            
+            alert(`✅ บันทึกเด็ค "${deckName}" สำเร็จ!`);
+            loadSavedDecks();
+        }
+
+        function loadSavedDecks() {
+            const container = document.getElementById('saved-decks-list');
+            let allUsersDecks = JSON.parse(localStorage.getItem('allUsersDecks') || '{}');
+            let userDecks = allUsersDecks[currentUser] || {};
+
+            const deckNames = Object.keys(userDecks);
+            if (deckNames.length === 0) {
+                container.innerHTML = `<div style="text-align: center; color: #666; font-size: 12px; padding: 10px;">ยังไม่มีเด็คที่บันทึก</div>`;
+                return;
+            }
+
+            container.innerHTML = '';
+            deckNames.forEach(name => {
+                const row = document.createElement('div');
+                row.className = 'saved-deck-row';
+                row.innerHTML = `
+                    <span><b>${name}</b> (${userDecks[name].length} ใบ)</span>
+                    <div style="display: flex; gap: 4px;">
+                        <button onclick="loadDeckByName('${name}')" style="background: #28a745; padding: 3px 6px;">โหลด</button>
+                        <button onclick="deleteSavedDeck('${name}')" style="background: #dc3545; padding: 3px 6px;">ลบ</button>
+                    </div>
+                `;
+                container.appendChild(row);
+            });
+        }
+
+        function loadDeckByName(name) {
+            let allUsersDecks = JSON.parse(localStorage.getItem('allUsersDecks') || '{}');
+            if (allUsersDecks[currentUser] && allUsersDecks[currentUser][name]) {
+                currentDeck = [...allUsersDecks[currentUser][name]];
+                document.getElementById('deck-name-input').value = name;
+                renderCurrentDeck();
+            }
+        }
+
+        function deleteSavedDeck(name) {
+            if (confirm(`คุณต้องการลบเด็ค "${name}" ใช่หรือไม่?`)) {
+                let allUsersDecks = JSON.parse(localStorage.getItem('allUsersDecks') || '{}');
+                if (allUsersDecks[currentUser]) {
+                    delete allUsersDecks[currentUser][name];
+                    localStorage.setItem('allUsersDecks', JSON.stringify(allUsersDecks));
+                    loadSavedDecks();
+                }
+            }
+        }
+
+        function openExportModal() {
+            if (currentDeck.length === 0) return alert("ไม่มีการ์ดในเด็คให้ออกโค้ด!");
+            
+            const deckName = document.getElementById('deck-name-input').value.trim() || "My Deck";
+            const counts = {};
+            currentDeck.forEach(c => {
+                let rarity = c.rarity ? c.rarity.toUpperCase() : 'C';
+                if (rarity === 'SEC') rarity = 'SCR';
+                const key = `${c.id}-${rarity}`;
+                counts[key] = (counts[key] || 0) + 1;
+            });
+
+            let codeOutput = `# ${deckName}\n\n# Main Deck\n`;
+            for (let key in counts) {
+                codeOutput += `${counts[key]}x ${key}\n`;
+            }
+            
+            document.getElementById('modal-title').innerText = "📤 โค้ดเด็คของคุณ";
+            document.getElementById('code-textarea').value = codeOutput.trim();
+            document.getElementById('modal-action-btn').innerText = "คัดลอกโค้ด";
+            document.getElementById('modal-action-btn').onclick = copyExportCode;
+            document.getElementById('code-modal').style.display = 'flex';
+        }
+
+        function copyExportCode() {
+            const textarea = document.getElementById('code-textarea');
+            textarea.select();
+            navigator.clipboard.writeText(textarea.value);
+            alert("📋 คัดลอกโค้ดเด็คไปยังคลิปบอร์ดแล้ว!");
+            closeCodeModal();
+        }
+
+        function openImportModal() {
+            document.getElementById('modal-title').innerText = "📥 ใช้รหัสเด็ค";
+            document.getElementById('code-textarea').value = "";
+            document.getElementById('code-textarea').placeholder = `# ชื่อเด็ค\n\n# Main Deck\n3x BT01-015-C\n2x BT01-016-SCR`;
+            document.getElementById('modal-action-btn').innerText = "ใช้รหัสเด็ค";
+            document.getElementById('modal-action-btn').onclick = executeImportCode;
+            document.getElementById('code-modal').style.display = 'flex';
+        }
+
+        function executeImportCode() {
+            const text = document.getElementById('code-textarea').value.trim();
+            if (!text) return alert("กรุณากรอกโค้ดเด็คก่อนนำเข้า!");
+
+            const lines = text.split('\n');
+            let importedCards = [];
+            let notFoundCodes = [];
+
+            lines.forEach(line => {
+                let trimmed = line.trim();
+                if (!trimmed || trimmed.startsWith('#')) return;
+
+                const regex = /^(\d+)[xX]\s*(.+?)(?:-([A-Za-z]+))?$/;
+                let match = trimmed.match(regex);
+
+                let count = 1;
+                let queryId = trimmed;
+                let targetRarity = null;
+
+                if (match) {
+                    count = parseInt(match[1]);
+                    queryId = match[2].trim();
+                    targetRarity = match[3] ? match[3].toUpperCase() : null;
+                }
+
+                let targetRarityAlt = targetRarity;
+                if (targetRarity === 'SCR') targetRarityAlt = 'SEC';
+                else if (targetRarity === 'SEC') targetRarityAlt = 'SCR';
+
+                let foundCard = allCards.find(c => {
+                    let matchId = c.id && c.id.trim().toLowerCase() === queryId.toLowerCase();
+                    if (matchId && targetRarity) {
+                        let cRarity = c.rarity ? c.rarity.toUpperCase() : '';
+                        return cRarity === targetRarity || cRarity === targetRarityAlt;
+                    }
+                    return matchId;
+                });
+
+                if (!foundCard) {
+                    foundCard = allCards.find(c => c.name && c.name.toLowerCase() === queryId.toLowerCase());
+                }
+
+                if (foundCard) {
+                    for (let i = 0; i < count; i++) {
+                        if (importedCards.length >= MAX_DECK_SIZE) break;
+                        importedCards.push({ ...foundCard });
+                    }
+                } else {
+                    notFoundCodes.push(trimmed);
+                }
+            });
+
+            if (importedCards.length > 0) {
+                currentDeck = importedCards;
+                renderCurrentDeck();
+                closeCodeModal();
+                alert(`✅ นำเข้าเด็คสำเร็จ (${importedCards.length} ใบ)`);
+            } else {
+                alert("❌ ไม่พบการ์ดตามรหัสที่ระบุ กรุณาตรวจสอบรูปแบบรหัสการ์ดใหม่อีกครั้ง");
+            }
+
+            if (notFoundCodes.length > 0) {
+                console.warn("⚠️ ไม่พบการ์ดเหล่านี้ในระบบ:", notFoundCodes);
+            }
+        }
+
+        function closeCodeModal() {
+            document.getElementById('code-modal').style.display = 'none';
+        }
+
+        function goToLobby() {
+            window.location.href = './lobby.html';
+        }
+    </script>
+</body>
+</html>
