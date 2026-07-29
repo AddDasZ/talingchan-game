@@ -1307,32 +1307,19 @@ io.on('connection', (socket) => {
             let summonedCard = pState.hand.splice(finalCardIndex, 1)[0];
             summonedCard.isResting = false;
             
-            // 🛑 [เปลี่ยนใหม่] อย่าเพิ่งเอาลงบอร์ด! ห่อหุ้มเป็น Pending Action ไว้ก่อน
             let actionData = {
                 type: 'SUMMON_AVATAR',
                 playerRole: playerRole,
                 summonedCard: summonedCard
             };
 
+            addGameLog(game, `⚠️ ${playerRole} กำลังจะอัญเชิญ [${summonedCard.name}]...`);
+
+            // ⚡ โยนเข้า React Chain Engine (ระบบใหม่จะจัดการเช็คเวทย์และเอาการ์ดลงบอร์ดให้เอง)
             initReactionWindow(game, roomName, playerRole, 'SUMMON_AVATAR', actionData, `ฝ่ายตรงข้ามอัญเชิญ [${summonedCard.name}]`);
 
-            // ⚡ โยนเข้า React Engine
-            let isPaused = promptReactionIfPossible(
-                game, 
-                roomName, 
-                playerRole, 
-                'SUMMON_AVATAR', 
-                actionData, 
-                `ฝ่ายตรงข้ามกำลังจะอัญเชิญ [${summonedCard.name}]`
-            );
-
-            // ถ้าไม่ต้องรอใคร ให้ดำเนินการลงบอร์ดทันที
-            if (!isPaused) {
-                executePendingAction(roomName, game, actionData); // เรียกฟังก์ชันประมวลผลทันที
-            } else {
-                broadcastGameState(roomName, game); // อัปเดตหน้าจอระหว่างรอ
-            }
-        }  
+            broadcastGameState(roomName, game);
+        } 
     });
 
     // -------------------------------------------------------------------------
@@ -1816,18 +1803,10 @@ io.on('connection', (socket) => {
             });
             addGameLog(game, `${playerRole} ประกาศใช้เวทมนตร์ [${magicCardCheck.name}]`);
 
-            // ⚡ [เปลี่ยนมาใช้ React Engine ตัวใหม่]
-            let isPaused = false;
             if (game.pendingAction) {
+                // ⚡ โยนเข้า React Chain Engine
                 initReactionWindow(game, roomName, playerRole, 'PLAY_MAGIC', game.pendingAction, `ฝ่ายตรงข้ามร่ายเวทย์ [${magicCardCheck.name}]`);
-                game.pendingAction = null; // คืนค่าเพราะเปลี่ยนไปใช้ Context แทน
-            }
-
-            // ถ้าไม่ต้องรอ React ให้ข้ามไปแสดงผลการ์ดทันที (Auto-Resolve)
-            if (!isPaused && game.pendingAction) {
-                console.log(`⏩ [Auto-Resolve] ฝ่ายตรงข้ามไม่มี React Magic ข้ามไปแสดงผลทันที`);
-                resolvePendingMagic(game, game.pendingAction, roomName, io, broadcastGameState);
-                game.pendingAction = null;
+                game.pendingAction = null; 
             }
 
             broadcastGameState(roomName, game);
@@ -1885,11 +1864,12 @@ io.on('connection', (socket) => {
             addGameLog(game, `🚫 [${attackerCard.name}] ปิดผนึกการใช้งาน React Magic ของฝ่ายตรงข้าม!`);
         }
         
-        // ⚡ 2. โยนเข้า React Engine (ถามฝ่ายตรงข้ามว่ามี "ไปเลยมอนตี้" ไหม?)
-        let isPaused = false;
+        // ⚡ 2. โยนเข้า React Engine
         if (!isReactLocked) {
             initReactionWindow(game, roomName, attackerPlayer, 'ATTACK_DECLARED', { type: 'COMBAT_REACT' }, `ฝ่ายตรงข้ามสั่ง [${attackerCard.name}] โจมตี!`);
+            broadcastGameState(roomName, game);
         } else {
+            // ถ้าโดนนางอัปสรล็อคเวทย์ ข้ามไปเช็คโล่มนุษย์และตีเลย
             checkHumanShieldAndExecute(game, roomName);
         }
 
