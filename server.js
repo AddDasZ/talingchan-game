@@ -765,7 +765,7 @@ function processLifeCardEffect(game, roomName, ownerRole, lifeCard) {
     }
 }
 
-app.use(express.static(__dirname));
+app.use(express.static(__dirname, { index: 'login.html' }));
 
 let rooms = {};
 // 🛡️ ฟังก์ชันเช็คว่ากระดานกำลังล็อคอยู่หรือไม่ (ป้องกันผู้เล่นกดยัดคำสั่ง)
